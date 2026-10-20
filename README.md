@@ -48,7 +48,15 @@ Queries: words are all required and stemmed, `"exact phrase"`, `-exclude`, `pref
 
 ## Agent skill
 
-`skills/trawl/SKILL.md` teaches your agents to find and read earlier conversations with trawl (`--json` output, and inside Claude Code the current conversation is left out). Install it with `bunx skills add KorigamiK/trawl`, or link the folder into your agent's skills directory:
+[`skills/trawl/SKILL.md`](skills/trawl/SKILL.md) teaches your agents to find and read earlier conversations with trawl (`--json` output, and inside Claude Code the current conversation is left out).
+
+Install the `trawl` CLI first using the instructions above, then install the skill:
+
+```sh
+bunx skills add KorigamiK/trawl --skill trawl
+```
+
+This installs the agent instructions; it does not install the `trawl` CLI. Alternatively, from a source checkout, link the folder into your agent's skills directory:
 
 ```sh
 ln -s "$PWD/skills/trawl" ~/.agents/skills/trawl   # or ~/.claude/skills/trawl
