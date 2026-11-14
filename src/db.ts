@@ -9,8 +9,8 @@ import type { Adapter, Agent, Fragment, Unit } from "./types.ts";
 
 const ADAPTERS: Record<Agent, Adapter> = { claude, codex, opencode };
 
-// Bump to rebuild existing indexes after a schema change.
-const VERSION = 1;
+// Bump to rebuild existing indexes after schema or parser changes.
+const VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE sessions (pk INTEGER PRIMARY KEY, agent TEXT, id TEXT, home TEXT, title TEXT, cwd TEXT,
@@ -49,8 +49,9 @@ function merge(fragments: Fragment[]): Fragment {
   const seen = new Set<string>();
   const messages = fragments
     .flatMap((f) => f.messages)
-    .filter((m) => !seen.has(`${m.role}\0${m.ts}\0${m.text}`) && !!seen.add(`${m.role}\0${m.ts}\0${m.text}`))
-    .sort((a, b) => a.ts - b.ts);
+    .filter((m) => !seen.has(`${m.role}\0${m.ts}\0${m.text}`) && !!seen.add(`${m.role}\0${m.ts}\0${m.text}`));
+  // A single unit already supplies canonical order (OpenCode's seq can differ from timestamps).
+  if (fragments.length > 1) messages.sort((a, b) => a.ts - b.ts);
   return {
     ...fragments.at(-1)!,
     title: fragments.findLast((f) => f.title)?.title,

@@ -84,6 +84,7 @@ test("opencode: text parts only, subagents flagged", () => {
       parts: [
         { role: "user", text: "write a request for the dataset", at: 1000 },
         { role: "user", text: "attached file", synthetic: true, at: 1001 },
+        { role: "user", text: "ignored text", ignored: true, at: 1001 },
         { role: "assistant", type: "tool", text: "tool output", at: 1002 },
         { role: "assistant", text: "Here it is.", at: 1003 },
       ],
@@ -96,4 +97,72 @@ test("opencode: text parts only, subagents flagged", () => {
     ["user", "write a request for the dataset"],
     ["assistant", "Here it is."],
   ]);
+});
+
+test("opencode: v2-only databases use the type column, seq order, and inline text", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "v2.db"), [{
+    id: "ses_v2", title: "Current conversation", messages: [
+      { id: "new_user", type: "user", seq: 1, at: 2000, data: { text: "  current question  ", files: [{ text: "attachment noise" }] } },
+      { id: "system", type: "system", seq: 2, at: 2001, data: { text: "system noise" } },
+      { id: "synthetic", type: "synthetic", seq: 3, at: 2002, data: { text: "injected noise" } },
+      { id: "compact", type: "compaction", seq: 4, at: 2003, data: { summary: "summary noise" } },
+      { id: "new_assistant", type: "assistant", seq: 9, at: 1000, data: { content: [
+        { type: "reasoning", text: "reasoning noise" },
+        { type: "text", text: "first answer" },
+        { type: "tool", text: "tool noise", state: { content: [{ type: "text", text: "result noise" }] } },
+        { type: "text", text: "second answer" },
+        { type: "text", text: "ignored noise", ignored: true },
+      ] } },
+    ],
+  }, { id: "ses_child", parent: "ses_v2", messages: [
+    { id: "child", type: "user", seq: 1, at: 3000, data: { text: "child task" } },
+  ] }]);
+  const units = opencode.units(path);
+  const f = opencode.parse(units.find((u) => u.key.endsWith("#ses_v2"))!)!;
+  expect([f.title, f.cwd, f.subagent]).toEqual(["Current conversation", "/work/v2", false]);
+  expect(said(f)).toEqual([["user", "current question"], ["assistant", "first answer\n\nsecond answer"]]);
+  expect(opencode.parse(units.find((u) => u.key.endsWith("#ses_child"))!)!.subagent).toBe(true);
+});
+
+test("opencode: assistant part rows precede trailing inline content", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "parts.db"), [{ id: "ses_parts", messages: [
+    { id: "split", type: "assistant", seq: 1, at: 1000, data: { content: [] }, parts: [
+      { type: "text", text: "first part" },
+      { type: "reasoning", text: "hidden reasoning" },
+      { type: "tool", text: "hidden tool output" },
+      { type: "text", text: "second part" },
+      { type: "text", text: "hidden synthetic", synthetic: true },
+      { type: "text", text: "hidden ignored", ignored: true },
+    ] },
+    { id: "mixed", type: "assistant", seq: 2, at: 1001, data: { content: [{ type: "text", text: "inline tail" }] }, parts: [
+      { type: "text", text: "stored part" },
+    ] },
+  ] }], { partRows: true });
+  expect(said(opencode.parse(opencode.units(path)[0]!))).toEqual([
+    ["assistant", "first part\n\nsecond part"], ["assistant", "stored part\n\ninline tail"],
+  ]);
+});
+
+test("opencode: migrated sessions prefer v2 while legacy-only sessions survive", () => {
+  const path = fx.writeOpencode(join(h.root, "mixed.db"), [
+    { id: "ses_shared", title: "Old title", dir: "/work/old", parts: [{ role: "user", text: "stale text", at: 1000 }] },
+    { id: "ses_legacy", title: "Legacy", dir: "/work/old", parts: [{ role: "user", text: "legacy question", at: 1000 }] },
+    { id: "ses_empty", title: "Stale", dir: "/work/old", parts: [{ role: "user", text: "deleted in v2", at: 1000 }] },
+  ]);
+  fx.writeOpencodeV2(path, [
+    { id: "ses_shared", title: "New title", messages: [{ id: "current", type: "user", seq: 1, at: 1000, data: { text: "current text" } }] },
+    { id: "ses_empty", messages: [] },
+  ]);
+  const units = opencode.units(path);
+  expect(units).toHaveLength(3);
+  const fragments = units.map((u) => opencode.parse(u));
+  expect(fragments.find((f) => f?.id === "ses_shared")?.title).toBe("New title");
+  expect(fragments.flatMap((f) => f?.messages.map((m) => m.text) ?? []).sort()).toEqual(["current text", "legacy question"]);
+});
+
+test("opencode: early v2 projections using the session table", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "early.db"), [{ id: "ses_early", messages: [
+    { id: "early", type: "user", seq: 1, at: 1000, data: { text: "early v2 question" } },
+  ] }], { sessionTable: "session" });
+  expect(said(opencode.parse(opencode.units(path)[0]!))).toEqual([["user", "early v2 question"]]);
 });

@@ -68,7 +68,7 @@ ln -s "$PWD/skills/trawl" ~/.agents/skills/trawl   # or ~/.claude/skills/trawl
 | --- | --- |
 | Claude Code | `~/.claude`, `$CLAUDE_CONFIG_DIR`, other `~/.claude*` homes |
 | Codex | `~/.codex`, `$CODEX_HOME`, other `~/.codex*` homes |
-| opencode | `~/.local/share/opencode/opencode.db` |
+| opencode | `$XDG_DATA_HOME/opencode` (default `~/.local/share/opencode`): `opencode.db`, channel databases `opencode-*.db`, and `$OPENCODE_DB` |
 
 Add other locations in `~/.config/trawl/config.json`:
 
@@ -86,6 +86,8 @@ Add other locations in `~/.config/trawl/config.json`:
 Set `"autodiscover": false` to read only the listed sources.
 
 Only what you and the agent wrote is indexed. Injected context, tool calls and their output, and reasoning are skipped.
+
+OpenCode's legacy SQLite tables and v2 projected messages are supported, including separate assistant part rows. Migrated sessions use the v2 copy; sessions that exist only in the legacy tables are retained. Relative `$OPENCODE_DB` paths resolve under the OpenCode data directory. Resume commands select the source database with `OPENCODE_DB`.
 
 ## Privacy
 

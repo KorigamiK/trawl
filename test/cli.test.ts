@@ -45,6 +45,19 @@ test("configured sources", () => {
   expect(JSON.parse(trawl("sources", "--json").out).sources.map((s: any) => s.path)).toEqual([join(h.root, "work-claude")]);
 });
 
+test("OpenCode resume selects the source database even when OPENCODE_DB points elsewhere", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "custom database's.db"), [{ id: "ses_resume", messages: [
+    { id: "user", type: "user", seq: 1, at: 1000, data: { text: "database selection" } },
+  ] }]);
+  writeFileSync(join(h.root, ".config", "trawl", "config.json"), JSON.stringify({
+    autodiscover: false, sources: [{ agent: "opencode", path }],
+  }));
+  process.env.OPENCODE_DB = "/some/other.db";
+  const resumed = trawl("resume", "ses_resume");
+  expect(resumed.code).toBe(0);
+  expect(resumed.out.trim()).toBe("cd /work/v2 && OPENCODE_DB=~/'custom database'\\''s.db' opencode -s ses_resume");
+});
+
 test("errors are short", () => {
   expect(trawl("--nope").err).toContain("See trawl --help");
   expect(trawl("show", "ffff").err).toContain("No conversation");

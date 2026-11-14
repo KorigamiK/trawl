@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openIndex, update } from "../src/db.ts";
 import { find, recent, search, toMatch, transcript } from "../src/search.ts";
@@ -62,6 +62,103 @@ test("discovers every agent home", () => {
     ["codex", "/.codex2"],
     ["opencode", "/.local/share/opencode/opencode.db"],
   ]);
+});
+
+test("discovers OpenCode channel databases and relative or absolute OPENCODE_DB overrides", () => {
+  const data = join(h.root, "xdg-data");
+  process.env.XDG_DATA_HOME = data;
+  const dir = join(data, "opencode");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["opencode.db", "opencode-preview.db", "custom.db", "opencode-preview.db-wal"]) writeFileSync(join(dir, name), "");
+  mkdirSync(join(dir, "opencode-directory.db"));
+  symlinkSync(join(dir, "opencode.db"), join(dir, "opencode-linked.db"));
+  process.env.OPENCODE_DB = "custom.db";
+  const paths = () => sources().filter((s) => s.agent === "opencode").map((s) => s.path);
+  expect(paths()).toEqual([join(dir, "custom.db"), join(dir, "opencode.db"), join(dir, "opencode-preview.db")]);
+  const external = join(h.root, "external.db");
+  writeFileSync(external, "");
+  process.env.OPENCODE_DB = external;
+  expect(paths()).toEqual([external, join(dir, "opencode.db"), join(dir, "opencode-preview.db")]);
+  process.env.OPENCODE_DB = ":memory:";
+  expect(paths()).toEqual([join(dir, "opencode.db"), join(dir, "opencode-preview.db")]);
+});
+
+test("discovers Codex homes with only archived sessions", () => {
+  const archived = join(h.root, ".codex-archive", "archived_sessions");
+  fx.writeJsonl(join(archived, "rollout-archive.jsonl"), [
+    fx.codex.meta("archived-thread", "2026-10-01T00:00:00Z"),
+    fx.codex.message("user", "archived conversation", "2026-10-01T00:00:01Z"),
+  ]);
+  expect(index()).toEqual([]);
+  expect(find(db, "archived-thread").home).toBe(join(h.root, ".codex-archive"));
+});
+
+test("OpenCode indexing preserves seq and notices message edits and deletions without session updates", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "projected.db"), [{ id: "ses_incremental", messages: [
+    { id: "user", type: "user", seq: 1, at: 2000, data: { text: "incremental question" } },
+    { id: "assistant", type: "assistant", seq: 3, at: 1000, data: { content: [{ type: "text", text: "initial answer" }] } },
+  ] }]);
+  const source = [{ agent: "opencode" as const, path }];
+  expect(update(db, source)).toEqual([]);
+  expect(transcript(db, find(db, "ses_incremental")).map((m) => m.role)).toEqual(["user", "assistant"]);
+  const writer = new Database(path);
+  try {
+    writer.query("UPDATE session_message SET data = ?, time_updated = 4000 WHERE id = 'assistant'")
+      .run(JSON.stringify({ content: [{ type: "text", text: "streamed replacement" }] }));
+    expect(update(db, source)).toEqual([]);
+    expect(ids("streamed replacement")).toEqual(["opencode"]);
+    expect(ids("initial answer")).toEqual([]);
+    writer.run("DELETE FROM session_message WHERE id = 'user'");
+    expect(update(db, source)).toEqual([]);
+    expect(ids("incremental question")).toEqual([]);
+    expect(find(db, "ses_incremental").messages).toBe(1);
+  } finally {
+    writer.close();
+  }
+});
+
+test("OpenCode indexing notices edits and deletions in separate assistant part rows", () => {
+  const path = fx.writeOpencodeV2(join(h.root, "part-updates.db"), [{ id: "ses_part_updates", messages: [
+    { id: "assistant", type: "assistant", seq: 1, at: 1000, data: { content: [] }, parts: [
+      { type: "text", text: "first paragraph" }, { type: "text", text: "second paragraph" },
+    ] },
+  ] }], { partRows: true });
+  const source = [{ agent: "opencode" as const, path }];
+  expect(update(db, source)).toEqual([]);
+  const writer = new Database(path);
+  try {
+    writer.query("UPDATE session_part SET data = ?, time_updated = 2000 WHERE ordinal = 0")
+      .run(JSON.stringify({ type: "text", text: "updated paragraph" }));
+    expect(update(db, source)).toEqual([]);
+    expect(ids("updated paragraph")).toEqual(["opencode"]);
+    expect(ids("first paragraph")).toEqual([]);
+    writer.run("DELETE FROM session_part WHERE ordinal = 1");
+    expect(update(db, source)).toEqual([]);
+    expect(ids("second paragraph")).toEqual([]);
+    expect(ids("updated paragraph")).toEqual(["opencode"]);
+  } finally {
+    writer.close();
+  }
+});
+
+test("OpenCode incremental indexing switches to a migrated copy with identical timestamps", () => {
+  const path = join(h.root, ".local", "share", "opencode", "opencode.db");
+  fx.writeOpencodeV2(path, [{ id: "ses_abc123", messages: [
+    { id: "migrated", type: "user", seq: 1, at: Date.parse("2026-10-06T17:07:00Z"), data: { text: "migrated conversation" } },
+  ] }]);
+  expect(index()).toEqual([]);
+  expect(ids("tracebench")).toEqual([]);
+  expect(ids("migrated conversation")).toEqual(["opencode"]);
+  expect(db.query("SELECT count(*) AS n FROM units WHERE session_id = 'ses_abc123'").get()).toEqual({ n: 1 });
+});
+
+test("older indexes rebuild automatically for parser changes", () => {
+  db.run("PRAGMA user_version = 1");
+  db.close();
+  db = openIndex(join(h.root, "index.db"));
+  expect(db.query("SELECT count(*) AS n FROM sessions").get()).toEqual({ n: 0 });
+  expect(index()).toEqual([]);
+  expect(ids("tracebench")).toEqual(["opencode"]);
 });
 
 test("a project folder linked into another home is read once", () => {

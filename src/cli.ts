@@ -78,7 +78,11 @@ function resume(s: Session): string {
   const path = (p: string) => (tildify(p).startsWith("~/") ? "~/" + quote(tildify(p).slice(2)) : quote(p));
   const cd = s.cwd ? `cd ${s.cwd === home() ? "~" : path(s.cwd)} && ` : "";
   const homeEnv = { claude: ["CLAUDE_CONFIG_DIR", ".claude"], codex: ["CODEX_HOME", ".codex"], opencode: null }[s.agent];
-  const env = homeEnv && s.home !== join(home(), homeEnv[1]!) ? `${homeEnv[0]}=${path(s.home)} ` : "";
+  let env = homeEnv && s.home !== join(home(), homeEnv[1]!) ? `${homeEnv[0]}=${path(s.home)} ` : "";
+  if (s.agent === "opencode") {
+    // Pin the database even for the default source: the caller may have OPENCODE_DB set.
+    env = `OPENCODE_DB=${path(s.home)} `;
+  }
   const command = { claude: "claude --resume", codex: "codex resume", opencode: "opencode -s" }[s.agent];
   return `${cd}${env}${command} ${s.id}`;
 }

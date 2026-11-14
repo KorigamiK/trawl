@@ -40,7 +40,18 @@ export function sources(): Source[] {
       const m = /^\.(claude|codex)./.exec(name);
       if (m) wanted.push([m[1], join(h, name), false]);
     }
-    wanted.push(["opencode", join(dataHome(), "opencode", "opencode.db"), false]);
+    const opencodeHome = join(dataHome(), "opencode");
+    if (process.env.OPENCODE_DB && process.env.OPENCODE_DB !== ":memory:") {
+      wanted.push(["opencode", resolve(opencodeHome, process.env.OPENCODE_DB), false]);
+    }
+    wanted.push(["opencode", join(opencodeHome, "opencode.db"), false]);
+    if (existsSync(opencodeHome)) {
+      for (const entry of readdirSync(opencodeHome, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        if ((entry.isFile() || entry.isSymbolicLink()) && /^opencode-.+\.db$/.test(entry.name)) {
+          wanted.push(["opencode", join(opencodeHome, entry.name), false]);
+        }
+      }
+    }
   }
 
   const out: Source[] = [];
@@ -49,7 +60,10 @@ export function sources(): Source[] {
     if (!raw) continue;
     if (!isAgent(agent)) throw new UserError(`${configPath()}: unknown agent ${JSON.stringify(agent)}`);
     const path = resolve(expand(raw));
-    if (!existsSync(join(path, MARKER[agent]))) {
+    const present = agent === "opencode"
+      ? existsSync(path) && statSync(path).isFile()
+      : existsSync(join(path, MARKER[agent])) || (agent === "codex" && existsSync(join(path, "archived_sessions")));
+    if (!present) {
       if (configured) process.stderr.write(`trawl: no ${agent} history at ${raw}\n`);
       continue;
     }
